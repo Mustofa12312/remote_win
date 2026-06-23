@@ -54,11 +54,29 @@ func Setup(token string, ownerID int64) (*tele.Bot, error) {
 	}
 	globalBot = b
 
+	// Debug logger middleware
+	b.Use(func(next tele.HandlerFunc) tele.HandlerFunc {
+		return func(c tele.Context) error {
+			upd := c.Update()
+			if upd.Callback != nil {
+				log.Printf("📥 [Callback] ID=%s Data=%q Sender=%d", upd.Callback.ID, upd.Callback.Data, c.Sender().ID)
+			} else if upd.Message != nil {
+				log.Printf("📥 [Message] Text=%q Sender=%d", upd.Message.Text, c.Sender().ID)
+			}
+			return next(c)
+		}
+	})
+
 	// Auth middleware
 	authMiddleware := func(next tele.HandlerFunc) tele.HandlerFunc {
 		return func(c tele.Context) error {
-			if ownerID != 0 && c.Sender().ID != ownerID {
-				return c.Send("⛔ Unauthorized")
+			sender := c.Sender()
+			if sender == nil {
+				return next(c)
+			}
+			if ownerID != 0 && sender.ID != ownerID {
+				log.Printf("⛔ Unauthorized: user %d tried to access bot", sender.ID)
+				return c.Respond(&tele.CallbackResponse{Text: "⛔ Unauthorized"})
 			}
 			return next(c)
 		}
@@ -308,8 +326,8 @@ func sendFileBrowserRequest(c tele.Context, deviceID, path string, isEdit bool) 
 // ── Callback Router ────────────────────────────────────
 
 func handleCallback(c tele.Context) error {
-	data := c.Data()
-	log.Printf("📲 Callback received: %q from user %d", data, c.Sender().ID)
+	data := strings.TrimPrefix(c.Callback().Data, "\f")
+	log.Printf("📲 Callback action: %q from user %d", data, c.Sender().ID)
 	parts := strings.SplitN(data, "|", 4)
 	action := parts[0]
 
