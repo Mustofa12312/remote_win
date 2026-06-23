@@ -43,8 +43,9 @@ func Setup(token string, ownerID int64) (*tele.Bot, error) {
 	}
 
 	pref := tele.Settings{
-		Token:  token,
-		Poller: &tele.LongPoller{Timeout: 10 * time.Second},
+		Token:     token,
+		ParseMode: tele.ModeMarkdown,
+		Poller:    &tele.LongPoller{Timeout: 10 * time.Second},
 	}
 
 	b, err := tele.NewBot(pref)
