@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,8 +17,16 @@ import (
 )
 
 // Session tracks per-user state
+type DirEntry struct {
+	Name  string `json:"name"`
+	IsDir bool   `json:"is_dir"`
+	Size  int64  `json:"size"`
+}
+
 type Session struct {
 	SelectedDevice *models.Device
+	CurrentPath    string
+	DirEntries     []DirEntry
 }
 
 var sessions = map[int64]*Session{}
@@ -371,6 +380,63 @@ func handleCallback(c tele.Context) error {
 		}
 		return sendFileBrowserRequest(c, sess.SelectedDevice.DeviceID, "", true)
 
+	case "cmd_cd":
+		if len(parts) < 2 {
+			return c.Respond()
+		}
+		idxStr := parts[1]
+		sess := getSession(c.Sender().ID)
+		if sess.SelectedDevice == nil {
+			return c.Respond(&tele.CallbackResponse{Text: "Device tidak dipilih"})
+		}
+
+		newPath := ""
+		if idxStr == "-1" {
+			newPath = filepath.Dir(sess.CurrentPath)
+		} else {
+			idx, err := strconv.Atoi(idxStr)
+			if err == nil && idx >= 0 && idx < len(sess.DirEntries) {
+				newPath = filepath.Join(sess.CurrentPath, sess.DirEntries[idx].Name)
+			}
+		}
+
+		if newPath != "" {
+			cmd := models.Command{
+				DeviceID:       sess.SelectedDevice.DeviceID,
+				Type:           "list_dir",
+				Payload:        fmt.Sprintf(`{"path": "%s"}`, newPath),
+				TelegramChatID: c.Sender().ID,
+			}
+			database.DB.Create(&cmd)
+			return c.Respond(&tele.CallbackResponse{Text: "Membuka folder..."})
+		}
+		return c.Respond()
+
+	case "cmd_dl":
+		if len(parts) < 2 {
+			return c.Respond()
+		}
+		idxStr := parts[1]
+		sess := getSession(c.Sender().ID)
+		if sess.SelectedDevice == nil {
+			return c.Respond(&tele.CallbackResponse{Text: "Device tidak dipilih"})
+		}
+
+		idx, err := strconv.Atoi(idxStr)
+		if err == nil && idx >= 0 && idx < len(sess.DirEntries) {
+			targetPath := filepath.Join(sess.CurrentPath, sess.DirEntries[idx].Name)
+			cmd := models.Command{
+				DeviceID:       sess.SelectedDevice.DeviceID,
+				Type:           "download",
+				Payload:        fmt.Sprintf(`{"path": "%s"}`, targetPath),
+				TelegramChatID: c.Sender().ID,
+			}
+			database.DB.Create(&cmd)
+			c.Send("⏳ Sedang mendownload file, harap tunggu...")
+			return c.Respond(&tele.CallbackResponse{Text: "Downloading..."})
+		}
+		return c.Respond()
+
 	case "select_device":
 		if len(parts) < 2 {
 			return c.Respond()
@@ -500,13 +566,9 @@ func HandleCommandResult(b *tele.Bot, cmd *models.Command) {
 
 	case "list_dir":
 		var res struct {
-			Path    string   `json:"path"`
-			Entries []struct {
-				Name  string `json:"name"`
-				IsDir bool   `json:"is_dir"`
-				Size  int64  `json:"size"`
-			} `json:"entries"`
-			Error string `json:"error"`
+			Path    string     `json:"path"`
+			Entries []DirEntry `json:"entries"`
+			Error   string     `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(cmd.Result), &res); err != nil {
 			b.Send(chat, "❌ Gagal membaca direktori")
@@ -516,16 +578,77 @@ func HandleCommandResult(b *tele.Bot, cmd *models.Command) {
 			b.Send(chat, "❌ "+res.Error)
 			return
 		}
+
+		sess := getSession(cmd.TelegramChatID)
+		sess.CurrentPath = res.Path
+		sess.DirEntries = res.Entries
+
 		var sb strings.Builder
 		sb.WriteString(fmt.Sprintf("📁 *%s*\n\n", res.Path))
-		for _, e := range res.Entries {
-			if e.IsDir {
-				sb.WriteString(fmt.Sprintf("📂 %s\n", e.Name))
-			} else {
-				sb.WriteString(fmt.Sprintf("📄 %s (%s)\n", e.Name, formatBytes(e.Size)))
-			}
+
+		menu := &tele.ReplyMarkup{}
+		var rows []tele.Row
+
+		// Up button
+		if res.Path != "/" && res.Path != "" {
+			upBtn := menu.Data("⬆️ Ke Folder Induk", "cmd_cd", "-1")
+			rows = append(rows, menu.Row(upBtn))
 		}
-		b.Send(chat, sb.String(), tele.ModeMarkdown)
+
+		maxEntries := len(res.Entries)
+		truncated := false
+		if maxEntries > 80 {
+			maxEntries = 80
+			truncated = true
+		}
+
+		for i := 0; i < maxEntries; i++ {
+			e := res.Entries[i]
+			btnText := "📄 " + e.Name
+			if e.IsDir {
+				btnText = "📂 " + e.Name
+			}
+			if len(btnText) > 30 {
+				btnText = btnText[:27] + "..."
+			}
+
+			var btn tele.Btn
+			if e.IsDir {
+				btn = menu.Data(btnText, "cmd_cd", strconv.Itoa(i))
+			} else {
+				btn = menu.Data(fmt.Sprintf("%s (%s)", btnText, formatBytes(e.Size)), "cmd_dl", strconv.Itoa(i))
+			}
+			rows = append(rows, menu.Row(btn))
+		}
+
+		menu.Inline(rows...)
+
+		if truncated {
+			sb.WriteString("⚠️ _Daftar dipotong karena terlalu banyak file (max 80)_\n")
+		}
+
+		b.Send(chat, sb.String(), menu, tele.ModeMarkdown)
+
+	case "download":
+		var res struct {
+			Filename string `json:"filename"`
+			Data     []byte `json:"data"`
+			Error    string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(cmd.Result), &res); err != nil || res.Error != "" {
+			errMsg := "❌ Gagal download"
+			if res.Error != "" {
+				errMsg += ": " + res.Error
+			}
+			b.Send(chat, errMsg)
+			return
+		}
+
+		doc := &tele.Document{
+			File:     tele.FromReader(bytes.NewReader(res.Data)),
+			FileName: res.Filename,
+		}
+		b.Send(chat, doc)
 
 	default:
 		if cmd.Status == models.CommandStatusDone {

