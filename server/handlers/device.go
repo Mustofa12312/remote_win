@@ -3,6 +3,7 @@ package handlers
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -18,9 +19,27 @@ type RegisterDeviceRequest struct {
 	AgentVersion string `json:"agent_version"`
 }
 
+// MetricRequest is the DTO from agent — disk_info comes as JSON array, not string
+type MetricRequest struct {
+	CPUUsage        float64         `json:"cpu_usage"`
+	CPUTemp         float64         `json:"cpu_temp"`
+	CPUFreqMHz      float64         `json:"cpu_freq_mhz"`
+	RAMTotalMB      uint64          `json:"ram_total_mb"`
+	RAMUsedMB       uint64          `json:"ram_used_mb"`
+	RAMFreeMB       uint64          `json:"ram_free_mb"`
+	DiskInfo        json.RawMessage `json:"disk_info"` // array from agent → stored as string
+	UploadKBps      float64         `json:"upload_kbps"`
+	DownloadKBps    float64         `json:"download_kbps"`
+	LocalIP         string          `json:"local_ip"`
+	InternetOK      bool            `json:"internet_ok"`
+	BatteryLevel    int             `json:"battery_level"`
+	BatteryCharging bool            `json:"battery_charging"`
+	BatteryMinutes  int             `json:"battery_minutes"`
+}
+
 type HeartbeatRequest struct {
-	LocalIP  string         `json:"local_ip"`
-	Metrics  *models.Metric `json:"metrics"`
+	LocalIP string         `json:"local_ip"`
+	Metrics *MetricRequest `json:"metrics"`
 }
 
 // POST /api/devices/register
@@ -90,9 +109,29 @@ func Heartbeat(c *gin.Context) {
 
 	// Save metrics if provided
 	if req.Metrics != nil {
-		req.Metrics.DeviceID = device.DeviceID
-		req.Metrics.RecordedAt = now
-		database.DB.Create(req.Metrics)
+		diskInfoStr := "[]"
+		if len(req.Metrics.DiskInfo) > 0 {
+			diskInfoStr = string(req.Metrics.DiskInfo)
+		}
+		metric := models.Metric{
+			DeviceID:        device.DeviceID,
+			RecordedAt:      now,
+			CPUUsage:        req.Metrics.CPUUsage,
+			CPUTemp:         req.Metrics.CPUTemp,
+			CPUFreqMHz:      req.Metrics.CPUFreqMHz,
+			RAMTotalMB:      req.Metrics.RAMTotalMB,
+			RAMUsedMB:       req.Metrics.RAMUsedMB,
+			RAMFreeMB:       req.Metrics.RAMFreeMB,
+			DiskInfo:        diskInfoStr,
+			UploadKBps:      req.Metrics.UploadKBps,
+			DownloadKBps:    req.Metrics.DownloadKBps,
+			LocalIP:         req.Metrics.LocalIP,
+			InternetOK:      req.Metrics.InternetOK,
+			BatteryLevel:    req.Metrics.BatteryLevel,
+			BatteryCharging: req.Metrics.BatteryCharging,
+			BatteryMinutes:  req.Metrics.BatteryMinutes,
+		}
+		database.DB.Create(&metric)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "server_time": now.Unix()})
