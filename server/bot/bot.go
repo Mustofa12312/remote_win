@@ -309,6 +309,7 @@ func sendFileBrowserRequest(c tele.Context, deviceID, path string, isEdit bool) 
 
 func handleCallback(c tele.Context) error {
 	data := c.Data()
+	log.Printf("📲 Callback received: %q from user %d", data, c.Sender().ID)
 	parts := strings.SplitN(data, "|", 4)
 	action := parts[0]
 
