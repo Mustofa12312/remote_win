@@ -11,6 +11,25 @@ import (
 	"time"
 )
 
+// Collect gathers all metrics for Windows
+func Collect() *Metrics {
+	m := &Metrics{
+		BatteryLevel: -1,
+	}
+
+	m.CPUUsage = getCPUUsage()
+	m.CPUTemp = getCPUTemp()
+	m.CPUFreqMHz = getCPUFreq()
+	collectRAM(m)
+	m.DiskInfo = getDiskInfo()
+	collectNetwork(m)
+	collectBattery(m)
+	m.LocalIP = getLocalIP()
+	m.InternetOK = checkInternet()
+
+	return m
+}
+
 func getCPUUsage() float64 {
 	out, err := exec.Command("powershell", "-Command",
 		"(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average").Output()
