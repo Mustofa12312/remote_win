@@ -1,0 +1,23 @@
+# Binaries
+bin/
+*.exe
+
+# Environment files (contains secrets!)
+.env
+server/.env
+agent/.env
+
+# Database
+server/data/
+*.db
+*.sqlite
+
+# Agent credentials (contains device secret)
+agent/credentials.json
+
+# Go build cache
+.gopath/
+go/
+
+# Temp files
+/tmp/ws_screenshot.png
